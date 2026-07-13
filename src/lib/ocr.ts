@@ -1,0 +1,496 @@
+import type { ExpenseCategory, OcrResult } from "./types";
+
+type WorkerLike = {
+  setParameters: (p: Record<string, unknown>) => Promise<void>;
+  recognize: (img: unknown) => Promise<{ data: { text: string; confidence: number } }>;
+  terminate: () => Promise<void>;
+};
+
+let sharedWorker: WorkerLike | null = null;
+let workerPromise: Promise<WorkerLike> | null = null;
+
+async function getWorker(): Promise<WorkerLike> {
+  if (sharedWorker) return sharedWorker;
+  if (!workerPromise) {
+    workerPromise = (async () => {
+      const { createWorker } = await import("tesseract.js");
+      const worker = (await createWorker("por")) as unknown as WorkerLike;
+      sharedWorker = worker;
+      return worker;
+    })();
+  }
+  return workerPromise;
+}
+
+/** Pré-carrega o OCR (chamar ao abrir "Nova despesa"). */
+export async function warmupOcr(): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    await getWorker();
+  } catch {
+    // ignore
+  }
+}
+
+function toNumber(raw: string): number | null {
+  const normalized = raw.includes(",")
+    ? raw.replace(/\./g, "").replace(",", ".")
+    : raw.replace(",", ".");
+  const value = Number.parseFloat(normalized);
+  if (Number.isNaN(value) || value <= 0 || value >= 1_000_000) return null;
+  return value;
+}
+
+function formatDateParts(
+  day: string,
+  month: string,
+  yearRaw: string,
+): string | null {
+  let year = yearRaw;
+  if (year.length === 2) year = `20${year}`;
+  const d = Number(day);
+  const m = Number(month);
+  const y = Number(year);
+  if (d < 1 || d > 31 || m < 1 || m > 12 || y < 2000 || y > 2100) return null;
+  return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
+}
+
+/** Corrige erros comuns do OCR em cupons BR (ex.: NFC-e lido como WEC-e). */
+export function normalizeOcrText(text: string): string {
+  let out = text.replace(/\u00a0/g, " ");
+
+  out = out.replace(/\b[WNMH][FEPC][CEOG][\s-]*e\b/gi, "NFCE");
+  out = out.replace(/\bNFC[\s-]*e\b/gi, "NFCE");
+  out = out.replace(/\bNF[\s-]*e\b/gi, "NFE");
+  out = out.replace(/\bN[º°]\b/gi, "No");
+  out = out.replace(/\bN[oO0]\.(?=\s|\d)/g, "No ");
+  out = out.replace(/\b(?:ni|n1|nl)\s+(?=\d{4,})/gi, "No ");
+  out = out.replace(/\bS[eé]rie\b/gi, "Serie");
+  out = out.replace(/\bCNPJ[\s.:-]*/gi, "CNPJ ");
+  out = out.replace(/\bVALOR\s*TOTAI\b/gi, "VALOR TOTAL");
+  out = out.replace(/\bTOTAI\b/gi, "TOTAL");
+
+  out = out.replace(/\b(\d{1,2})\s+(\d{1,2})[\/\-.](\d{2,4})\b/g, (_, d, m, y) => {
+    return formatDateParts(d, m, y) ?? `${d}/${m}/${y}`;
+  });
+
+  out = out.replace(
+    /\b(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})\b/g,
+    (_, d, m, y) => formatDateParts(d, m, y) ?? `${d}/${m}/${y}`,
+  );
+
+  out = out.replace(/[ \t]+/g, " ");
+  return out.trim();
+}
+
+export function parseBrazilianAmount(text: string): number | null {
+  const scored: Array<{ value: number; score: number }> = [];
+
+  const push = (raw: string | undefined, score: number) => {
+    if (!raw) return;
+    const value = toNumber(raw);
+    if (value == null) return;
+    scored.push({ value, score });
+  };
+
+  for (const match of text.matchAll(
+    /valor\s*total\s*r?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/gi,
+  )) {
+    push(match[1], 100);
+  }
+  for (const match of text.matchAll(
+    /(?:total\s*a\s*pagar|total\s*geral|total\s*da\s*nota|valor\s*pago)\s*[:=]?\s*r?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/gi,
+  )) {
+    push(match[1], 92);
+  }
+  for (const match of text.matchAll(
+    /r\$\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/gi,
+  )) {
+    push(match[1], 70);
+  }
+
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => b.score - a.score || b.value - a.value);
+  return scored[0].value;
+}
+
+function cleanInvoiceCandidate(raw: string): string | null {
+  const cleaned = raw
+    .replace(/\s+/g, "")
+    .replace(/[^\w./-]/g, "")
+    .toUpperCase();
+
+  if (!cleaned) return null;
+  if (/^\d{44}$/.test(cleaned)) return null;
+  if (/^\d{11}$/.test(cleaned) || /^\d{14}$/.test(cleaned)) return null;
+  if (/^\d{5}-?\d{3}$/.test(cleaned)) return null;
+  if (!/\d/.test(cleaned)) return null;
+  if (cleaned.length < 3 || cleaned.length > 20) return null;
+  if (/^0+\d{0,2}$/.test(cleaned) && cleaned.length <= 3) return null;
+  return cleaned;
+}
+
+export function parseInvoiceNumber(text: string): string | null {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const candidates: Array<{ value: string; score: number }> = [];
+
+  const push = (raw: string | undefined, score: number) => {
+    if (!raw) return;
+    const cleaned = cleanInvoiceCandidate(raw);
+    if (!cleaned) return;
+    if (/^\d{44}$/.test(cleaned)) return;
+    candidates.push({ value: cleaned, score });
+  };
+
+  const accessKeyMatch = text.match(/(?:^|\D)(\d{44})(?:\D|$)/);
+  if (accessKeyMatch) {
+    const key = accessKeyMatch[1];
+    const nNF = key.slice(25, 34).replace(/^0+/, "") || key.slice(25, 34);
+    const serie =
+      key.slice(22, 25).replace(/^0+/, "") || key.slice(22, 25);
+    push(nNF, 70);
+    if (serie && Number(serie) > 0) push(`${nNF}-${serie}`, 72);
+  }
+
+  const nfceBlock =
+    /(?:NFCE|NFE)\s*(?:No)?\s*[:=#-]?\s*(\d{4,12})(?:\s+Serie\s*[:=]?\s*(\d{1,4}))?/gi;
+  for (const match of text.matchAll(nfceBlock)) {
+    if (match[2]) push(`${match[1]}-${match[2]}`, 98);
+    push(match[1], 96);
+  }
+
+  const noSerie =
+    /\bNo\s*[:=#-]?\s*(\d{4,12})\s+Serie\s*[:=]?\s*(\d{1,4})\b/gi;
+  for (const match of text.matchAll(noSerie)) {
+    push(`${match[1]}-${match[2]}`, 94);
+    push(match[1], 92);
+  }
+
+  const dirtyNfce =
+    /(?:[WNMH][FEPC][CEOG][\s-]*e|nfc[\s-]*e|nfce?)\s*(?:ni|n1|nl|no\.?)?\s*[:=#-]?\s*(\d{4,12})(?:\s+s[eé]rie\s*[:=]?\s*(\d{1,4}))?/gi;
+  for (const match of text.matchAll(dirtyNfce)) {
+    if (match[1].length > 12) continue;
+    if (match[2]) push(`${match[1]}-${match[2]}`, 97);
+    push(match[1], 95);
+  }
+
+  for (const match of text.matchAll(
+    /(?:numero|n[uú]mero|no\.?)\s*(?:da\s+)?(?:nota|nf|nfce?|cupom|doc(?:umento)?|fatura)?\s*[:=#-]?\s*([0-9]{4,12})/gi,
+  )) {
+    if (match[1].length <= 12) push(match[1], 90);
+  }
+
+  for (const match of text.matchAll(
+    /(?:coo|extrato|cupom)\s*(?:no\.?)?\s*[:=#-]?\s*([0-9]{4,12})/gi,
+  )) {
+    if (match[1].length <= 12) push(match[1], 80);
+  }
+
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    const looksLikeInvoice =
+      /nf|wec|nec|nota|cupom|coo|danfe|serie|extrato|consumidor/.test(lower) &&
+      !/total|valor|r\$|cnpj|cpf|tribut|chave|consulta/.test(lower);
+    if (!looksLikeInvoice) continue;
+
+    const near = line.match(
+      /(?:no|ni|n1|nl)\s*[:=#-]?\s*(\d{4,12})(?:\s+serie\s*[:=]?\s*(\d{1,4}))?/i,
+    );
+    if (near) {
+      if (near[2]) push(`${near[1]}-${near[2]}`, 93);
+      push(near[1], 91);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => {
+    const scoreDiff = b.score - a.score;
+    if (scoreDiff !== 0) return scoreDiff;
+    const aLen = a.value.replace(/\D/g, "").length;
+    const bLen = b.value.replace(/\D/g, "").length;
+    const aNice = aLen >= 4 && aLen <= 9 ? 1 : 0;
+    const bNice = bLen >= 4 && bLen <= 9 ? 1 : 0;
+    if (aNice !== bNice) return bNice - aNice;
+    return aLen - bLen;
+  });
+
+  return candidates[0].value;
+}
+
+export function parseExpenseDate(text: string): string | null {
+  const scored: Array<{ iso: string; score: number }> = [];
+
+  const consider = (
+    day: string,
+    month: string,
+    yearRaw: string,
+    score: number,
+  ) => {
+    const formatted = formatDateParts(day, month, yearRaw);
+    if (!formatted) return;
+    const [dd, mm, yyyy] = formatted.split("/");
+    const iso = `${yyyy}-${mm}-${dd}`;
+    const date = new Date(`${iso}T12:00:00`);
+    if (Number.isNaN(date.getTime())) return;
+    const max = Date.now() + 2 * 24 * 60 * 60 * 1000;
+    if (date.getTime() > max) return;
+    scored.push({ iso, score });
+  };
+
+  for (const match of text.matchAll(
+    /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\s+\d{1,2}[:hH]\d{2}(?::\d{2})?\b/g,
+  )) {
+    consider(match[1], match[2], match[3], 95);
+  }
+
+  for (const match of text.matchAll(
+    /Serie\s*\d{1,4}\s+(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/gi,
+  )) {
+    consider(match[1], match[2], match[3], 94);
+  }
+
+  for (const match of text.matchAll(
+    /\b(\d{1,2})\s+(\d{1,2})\/(\d{2,4})\s+\d{1,2}[:hH]\d{2}/g,
+  )) {
+    consider(match[1], match[2], match[3], 93);
+  }
+
+  for (const match of text.matchAll(
+    /(?:data|emiss[aã]o|emitid[ao]|dt\.?)\s*[:=]?\s*(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})/gi,
+  )) {
+    consider(match[1], match[2], match[3], 90);
+  }
+
+  for (const match of text.matchAll(
+    /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/g,
+  )) {
+    consider(match[1], match[2], match[3], 60);
+  }
+
+  for (const match of text.matchAll(/\b(\d{1,2})\s+(\d{1,2})\/(\d{2,4})\b/g)) {
+    consider(match[1], match[2], match[3], 85);
+  }
+
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].iso;
+}
+
+/** Sugere estabelecimento a partir do texto do cupom. */
+export function parseMerchantName(text: string): string | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 4);
+
+  const skip =
+    /cnpj|cpf|ie\b|im\b|documento|auxiliar|nota fiscal|consumidor|endereco|endereço|rua|av\.|telefone|total|valor|r\$|forma|pagamento|cartao|cartão|serie|nfce|chave|protocolo|tribut|qtd|item|descricao|descrição/i;
+
+  for (const line of lines.slice(0, 8)) {
+    if (skip.test(line)) continue;
+    if (/^[\d\s./-]+$/.test(line)) continue;
+    if (line.length < 5 || line.length > 60) continue;
+    // precisa ter letras
+    if (!/[A-Za-zÀ-ÿ]{3,}/.test(line)) continue;
+    return line.replace(/\s+/g, " ").slice(0, 80);
+  }
+  return null;
+}
+
+export function suggestCategory(text: string): ExpenseCategory | null {
+  const t = text.toLowerCase();
+  if (/posto|combust|gasolina|etanol|diesel|shell|ipiranga|petrobras/.test(t)) {
+    return "combustivel";
+  }
+  if (/hotel|pousada|hosped|motel|booking/.test(t)) return "hotel";
+  if (
+    /restaur|lanch|padaria|cafe|café|bar |pizza|burger|mcdonald|ifood|refei/.test(
+      t,
+    )
+  ) {
+    return "refeicao";
+  }
+  if (/pedagio|pedágio|sem parar|conectcar|toll/.test(t)) return "pedagio";
+  if (/farma|drogaria|mercado|supermerc|atacad|loja|magazine/.test(t)) {
+    return "outros";
+  }
+  return null;
+}
+
+type PreprocessMode = "binary" | "contrast" | "soft";
+
+async function loadBitmap(
+  imageSource: File | Blob | string,
+): Promise<ImageBitmap> {
+  if (typeof imageSource === "string") {
+    return createImageBitmap(await (await fetch(imageSource)).blob());
+  }
+  return createImageBitmap(imageSource);
+}
+
+async function preprocessVariant(
+  imageSource: File | Blob | string,
+  mode: PreprocessMode,
+): Promise<Blob> {
+  const bitmap = await loadBitmap(imageSource);
+  const maxWidth = 2000;
+  const scale =
+    bitmap.width > maxWidth ? maxWidth / bitmap.width : Math.max(1.4, 1400 / bitmap.width);
+  const width = Math.round(bitmap.width * scale);
+  const height = Math.round(bitmap.height * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    bitmap.close();
+    return imageSource instanceof Blob
+      ? imageSource
+      : await (await fetch(imageSource as string)).blob();
+  }
+
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+
+  const image = ctx.getImageData(0, 0, width, height);
+  const data = image.data;
+
+  let sum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  }
+  const mean = sum / (data.length / 4);
+  const threshold = mode === "soft" ? mean * 0.95 : mean * 0.9;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    if (mode === "contrast") {
+      const c = Math.max(0, Math.min(255, (gray - mean) * 1.8 + 128));
+      data[i] = c;
+      data[i + 1] = c;
+      data[i + 2] = c;
+    } else {
+      const v = gray < threshold ? 0 : 255;
+      data[i] = v;
+      data[i + 1] = v;
+      data[i + 2] = v;
+    }
+  }
+
+  ctx.putImageData(image, 0, 0);
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/png"),
+  );
+  return blob ?? (imageSource instanceof Blob ? imageSource : new Blob());
+}
+
+function voteValue<T extends string | number>(
+  values: Array<T | null | undefined>,
+): T | null {
+  const counts = new Map<T, number>();
+  for (const value of values) {
+    if (value == null || value === "") continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || String(b[0]).length - String(a[0]).length)[0][0];
+}
+
+export type OcrExpenseResult = OcrResult & {
+  date: string | null;
+  merchant: string | null;
+  category: ExpenseCategory | null;
+};
+
+function parseFromText(text: string) {
+  const normalized = normalizeOcrText(text);
+  return {
+    raw: normalized || text,
+    amount: parseBrazilianAmount(normalized) ?? parseBrazilianAmount(text),
+    invoiceNumber:
+      parseInvoiceNumber(normalized) ?? parseInvoiceNumber(text),
+    date: parseExpenseDate(normalized) ?? parseExpenseDate(text),
+    merchant: parseMerchantName(normalized) ?? parseMerchantName(text),
+    category: suggestCategory(normalized) ?? suggestCategory(text),
+  };
+}
+
+export async function extractExpenseFromImage(
+  imageSource: File | Blob | string,
+): Promise<OcrExpenseResult> {
+  const { PSM } = await import("tesseract.js");
+  const worker = await getWorker();
+
+  const variants = await Promise.all([
+    preprocessVariant(imageSource, "binary"),
+    preprocessVariant(imageSource, "contrast"),
+    preprocessVariant(imageSource, "soft"),
+  ]);
+
+  const originalUrl =
+    typeof imageSource === "string"
+      ? imageSource
+      : URL.createObjectURL(imageSource);
+
+  const jobs: Array<{ img: Blob | string; psm: unknown }> = [
+    { img: variants[0], psm: PSM.SINGLE_BLOCK },
+    { img: variants[0], psm: PSM.AUTO },
+    { img: variants[1], psm: PSM.AUTO },
+    { img: variants[2], psm: PSM.SINGLE_COLUMN },
+    { img: originalUrl, psm: PSM.AUTO },
+  ];
+
+  const texts: string[] = [];
+  const confidences: number[] = [];
+  const parsedPasses: ReturnType<typeof parseFromText>[] = [];
+
+  try {
+    for (const job of jobs) {
+      await worker.setParameters({
+        tessedit_pageseg_mode: job.psm,
+        preserve_interword_spaces: "1",
+      });
+      const result = await worker.recognize(job.img);
+      const text = result.data.text || "";
+      texts.push(text);
+      confidences.push((result.data.confidence || 0) / 100);
+      parsedPasses.push(parseFromText(text));
+    }
+  } finally {
+    if (typeof imageSource !== "string") URL.revokeObjectURL(originalUrl);
+  }
+
+  // Também parseia o texto mesclado (ajuda quando cada passagem pega um pedaço)
+  const merged = normalizeOcrText(texts.join("\n"));
+  parsedPasses.push(parseFromText(merged));
+
+  const amount = voteValue(parsedPasses.map((p) => p.amount));
+  const invoiceNumber = voteValue(
+    parsedPasses.map((p) => p.invoiceNumber as string | null),
+  );
+  const date = voteValue(parsedPasses.map((p) => p.date));
+  const merchant = voteValue(parsedPasses.map((p) => p.merchant));
+  const category = voteValue(parsedPasses.map((p) => p.category));
+
+  const confidence =
+    confidences.reduce((a, b) => a + b, 0) / Math.max(confidences.length, 1);
+
+  // boost de confiança se vários campos fecharam por votação
+  const filled =
+    Number(amount != null) +
+    Number(Boolean(invoiceNumber)) +
+    Number(Boolean(date));
+  const adjustedConfidence = Math.min(1, confidence + filled * 0.05);
+
+  return {
+    amount,
+    invoiceNumber,
+    date,
+    merchant,
+    category,
+    rawText: merged,
+    confidence: adjustedConfidence,
+  };
+}

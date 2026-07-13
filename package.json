@@ -1,0 +1,36 @@
+{
+  "name": "gasto-campo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.1",
+    "@supabase/supabase-js": "^2.110.3",
+    "browser-image-compression": "^2.0.2",
+    "idb": "^8.0.3",
+    "next": "16.2.10",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tesseract.js": "^7.0.0",
+    "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "@ducanh2912/next-pwa": "^10.2.9",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "next-pwa": "^5.6.0",
+    "sharp": "^0.35.3",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

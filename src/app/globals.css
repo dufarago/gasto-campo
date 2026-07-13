@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f3efe6;
+  --foreground: #1c2a22;
+  --ink: #142019;
+  --muted: #5a6b60;
+  --surface: #fffdf8;
+  --sand: #ebe4d6;
+  --border: #d5cdb8;
+  --accent: #1f6b4a;
+  --accent-soft: #d8efe4;
+  --danger: #9b2c2c;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-source);
+  --font-display: var(--font-display);
+}
+
+body {
+  background:
+    radial-gradient(ellipse 80% 50% at 10% -10%, #d8efe4 0%, transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, #e8dcc4 0%, transparent 45%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-source), Georgia, serif;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display), Georgia, serif;
+  letter-spacing: -0.02em;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 10px 30px rgba(20, 32, 25, 0.04);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  border-radius: 0.75rem;
+  padding: 0.7rem 1rem;
+  font-weight: 600;
+}
+
+.btn-primary:disabled {
+  opacity: 0.55;
+}
+
+.field {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--ink);
+  border-radius: 0.75rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
