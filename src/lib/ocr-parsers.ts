@@ -1,9 +1,12 @@
 import type { ExpenseCategory, OcrResult } from "./types";
 
 function toNumber(raw: string): number | null {
-  const normalized = raw.includes(",")
-    ? raw.replace(/\./g, "").replace(",", ".")
-    : raw.replace(",", ".");
+  let cleaned = raw.trim().replace(/[^\d.,\s]/g, "");
+  // "49 96" ou "49  96" → decimal BR
+  cleaned = cleaned.replace(/^(\d+)\s+(\d{2})$/, "$1,$2");
+  const normalized = cleaned.includes(",")
+    ? cleaned.replace(/\./g, "").replace(",", ".").replace(/\s/g, "")
+    : cleaned.replace(",", ".").replace(/\s/g, "");
   const value = Number.parseFloat(normalized);
   if (Number.isNaN(value) || value <= 0 || value >= 1_000_000) return null;
   return value;
@@ -25,16 +28,24 @@ function formatDateParts(
 
 export function normalizeOcrText(text: string): string {
   let out = text.replace(/\u00a0/g, " ");
-  out = out.replace(/\b[WNMH][FEPC][CEOG][\s-]*e\b/gi, "NFCE");
+  // NFC-e distorcido: WEC-e, MEC-e, ECA, NEC-e, etc.
+  out = out.replace(/\b[WNMH][FEPCMAE][CEGOA][\s.-]*e?\b/gi, "NFCE");
+  out = out.replace(/\b(?:MEC|ECA|NEC|WEC)[\s.-]*(?:e|nd|ne|ni)?\b/gi, "NFCE");
   out = out.replace(/\bNFC[\s-]*e\b/gi, "NFCE");
   out = out.replace(/\bNF[\s-]*e\b/gi, "NFE");
   out = out.replace(/\bN[º°]\b/gi, "No");
   out = out.replace(/\bN[oO0]\.(?=\s|\d)/g, "No ");
-  out = out.replace(/\b(?:ni|n1|nl)\s+(?=\d{4,})/gi, "No ");
+  out = out.replace(/\b(?:ni|n1|nl|nd|ne)\s+(?=\d{3,})/gi, "No ");
   out = out.replace(/\bS[eé]rie\b/gi, "Serie");
+  out = out.replace(/\bS[eo0]\b(?=\s*\d)/gi, "Serie"); // "Serie So 55" / "Serie So"
   out = out.replace(/\bCNPJ[\s.:-]*/gi, "CNPJ ");
   out = out.replace(/\bVALOR\s*TOTAI\b/gi, "VALOR TOTAL");
   out = out.replace(/\bTOTAI\b/gi, "TOTAL");
+  // total com espaço no centavo: "49 96" → "49,96"
+  out = out.replace(
+    /(valor\s*total\s*r?\$?\s*)(\d{1,5})\s+(\d{2})\b/gi,
+    "$1$2,$3",
+  );
   out = out.replace(/\b(\d{1,2})\s+(\d{1,2})[\/\-.](\d{2,4})\b/g, (_, d, m, y) => {
     return formatDateParts(d, m, y) ?? `${d}/${m}/${y}`;
   });
@@ -52,28 +63,36 @@ export function parseBrazilianAmount(text: string): number | null {
     if (!raw) return;
     const value = toNumber(raw);
     if (value == null) return;
+    // ignora valores tipicos de item unitário muito baixos se houver total maior
     scored.push({ value, score });
   };
 
+  const money =
+    "(\\d{1,3}(?:\\.\\d{3})*,\\d{2}|\\d+,\\d{2}|\\d{1,5}\\s+\\d{2}|\\d+\\.\\d{2})";
+
   for (const match of text.matchAll(
-    /valor\s*total\s*r?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/gi,
+    new RegExp(`valor\\s*total\\s*[:=]*\\s*r?\\$?\\s*${money}`, "gi"),
   )) {
     push(match[1], 100);
   }
   for (const match of text.matchAll(
-    /(?:total\s*a\s*pagar|total\s*geral|total\s*da\s*nota|valor\s*pago)\s*[:=]?\s*r?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/gi,
+    new RegExp(
+      `(?:total\\s*a\\s*pagar|total\\s*geral|total\\s*da\\s*nota|valor\\s*pago)\\s*[:=]?\\s*r?\\$?\\s*${money}`,
+      "gi",
+    ),
   )) {
     push(match[1], 92);
   }
-  for (const match of text.matchAll(
-    /r\$\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/gi,
-  )) {
+  for (const match of text.matchAll(new RegExp(`r\\$\\s*${money}`, "gi"))) {
     push(match[1], 70);
   }
 
   if (scored.length === 0) return null;
-  scored.sort((a, b) => b.score - a.score || b.value - a.value);
-  return scored[0].value;
+  // entre "valor total", prefere o maior (evita item 10,99)
+  const totals = scored.filter((s) => s.score >= 92);
+  const pool = totals.length > 0 ? totals : scored;
+  pool.sort((a, b) => b.score - a.score || b.value - a.value);
+  return pool[0].value;
 }
 
 function cleanInvoiceCandidate(raw: string): string | null {
@@ -128,11 +147,21 @@ export function parseInvoiceNumber(text: string): string | null {
   }
 
   const dirtyNfce =
-    /(?:[WNMH][FEPC][CEOG][\s-]*e|nfc[\s-]*e|nfce?)\s*(?:ni|n1|nl|no\.?)?\s*[:=#-]?\s*(\d{4,12})(?:\s+s[eé]rie\s*[:=]?\s*(\d{1,4}))?/gi;
+    /(?:[WNMH][FEPCMAE][CEGOA][\s.-]*e?|nfc[\s-]*e|nfce?|mec|eca)\s*(?:ni|n1|nl|nd|ne|no\.?)?\s*[:=#\-/]?\s*(\d{3,12})(?:\s+s[eéo0]rie\s*[:=]?\s*(\d{1,4}))?/gi;
   for (const match of text.matchAll(dirtyNfce)) {
     if (match[1].length > 12) continue;
-    if (match[2]) push(`${match[1]}-${match[2]}`, 97);
-    push(match[1], 95);
+    // "363/38" → tenta juntar como 363738 se OCR partiu
+    const num = match[1].replace("/", "");
+    if (match[2]) push(`${num}-${match[2]}`, 97);
+    push(num, 95);
+  }
+
+  // "363/38 Serie" padrão da Callfarma com barra no meio
+  for (const match of text.matchAll(
+    /\b(\d{3})\/(\d{2,3})\s+Serie\s*[:=]?\s*(\d{1,4})/gi,
+  )) {
+    push(`${match[1]}${match[2]}-${match[3]}`, 96);
+    push(`${match[1]}${match[2]}`, 94);
   }
 
   for (const match of text.matchAll(

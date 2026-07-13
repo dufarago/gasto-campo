@@ -82,9 +82,10 @@ export default function NovaDespesaPage() {
         filled.push("categoria");
       }
       setOcrFilled(filled);
-
-      if (filled.length > 0 && ocr.provider) {
-        setOcrProgress("");
+      if (ocr.provider === "google-vision") {
+        setOcrProgress("Lido com Google Vision");
+      } else {
+        setOcrProgress("Lido offline (Tesseract) — ative a cobrança Google p/ melhor qualidade");
       }
 
       if (filled.length === 0) {

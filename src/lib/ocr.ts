@@ -216,17 +216,18 @@ async function extractWithTesseract(
       ? imageSource
       : URL.createObjectURL(imageSource);
 
+  // Menos passagens, e escolhemos a MELHOR (não concatena tudo)
   const jobs: Array<{ img: Blob | string; psm: unknown }> = [
-    { img: variants[0], psm: PSM.SINGLE_BLOCK },
-    { img: variants[0], psm: PSM.AUTO },
     { img: variants[1], psm: PSM.AUTO },
-    { img: variants[2], psm: PSM.SINGLE_COLUMN },
+    { img: variants[0], psm: PSM.SINGLE_BLOCK },
     { img: originalUrl, psm: PSM.AUTO },
   ];
 
-  const texts: string[] = [];
-  const confidences: number[] = [];
-  const parsedPasses: ReturnType<typeof parseFromText>[] = [];
+  type Pass = ReturnType<typeof parseFromText> & {
+    confidence: number;
+    score: number;
+  };
+  const passes: Pass[] = [];
 
   try {
     for (const job of jobs) {
@@ -236,29 +237,43 @@ async function extractWithTesseract(
       });
       const result = await worker.recognize(job.img);
       const text = result.data.text || "";
-      texts.push(text);
-      confidences.push((result.data.confidence || 0) / 100);
-      parsedPasses.push(parseFromText(text));
+      const parsed = parseFromText(text);
+      const fieldScore =
+        Number(parsed.amount != null) * 3 +
+        Number(Boolean(parsed.invoiceNumber)) * 2 +
+        Number(Boolean(parsed.date)) * 2 +
+        Number(Boolean(parsed.merchant));
+      passes.push({
+        ...parsed,
+        confidence: (result.data.confidence || 0) / 100,
+        score: fieldScore,
+      });
     }
   } finally {
     if (typeof imageSource !== "string") URL.revokeObjectURL(originalUrl);
   }
 
-  const merged = normalizeOcrText(texts.join("\n"));
-  parsedPasses.push(parseFromText(merged));
-
-  const amount = voteValue(parsedPasses.map((p) => p.amount));
-  const invoiceNumber = voteValue(
-    parsedPasses.map((p) => p.invoiceNumber as string | null),
+  passes.sort(
+    (a, b) =>
+      b.score - a.score ||
+      b.confidence - a.confidence ||
+      (b.amount ?? 0) - (a.amount ?? 0),
   );
-  const date = voteValue(parsedPasses.map((p) => p.date));
-  const merchant = voteValue(parsedPasses.map((p) => p.merchant));
-  const category = voteValue(
-    parsedPasses.map((p) => p.category as ExpenseCategory | null),
-  );
+  const best = passes[0];
 
-  const confidence =
-    confidences.reduce((a, b) => a + b, 0) / Math.max(confidences.length, 1);
+  // Complementa campos faltantes com votação das outras passagens
+  const amount =
+    best.amount ?? voteValue(passes.map((p) => p.amount));
+  const invoiceNumber =
+    best.invoiceNumber ??
+    voteValue(passes.map((p) => p.invoiceNumber as string | null));
+  const date = best.date ?? voteValue(passes.map((p) => p.date));
+  const merchant =
+    best.merchant ?? voteValue(passes.map((p) => p.merchant));
+  const category =
+    best.category ??
+    voteValue(passes.map((p) => p.category as ExpenseCategory | null));
+
   const filled =
     Number(amount != null) +
     Number(Boolean(invoiceNumber)) +
@@ -270,8 +285,8 @@ async function extractWithTesseract(
     date,
     merchant,
     category,
-    rawText: merged,
-    confidence: Math.min(1, confidence + filled * 0.05),
+    rawText: best.raw,
+    confidence: Math.min(1, best.confidence + filled * 0.05),
     provider: "tesseract",
   };
 }
