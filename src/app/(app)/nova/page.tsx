@@ -25,7 +25,7 @@ export default function NovaDespesaPage() {
   const [amount, setAmount] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [category, setCategory] = useState<ExpenseCategory>("outros");
+  const [category, setCategory] = useState<ExpenseCategory | "">("");
   const [region, setRegion] = useState("");
   const [notes, setNotes] = useState("");
   const [ocrConfidence, setOcrConfidence] = useState<number | null>(null);
@@ -73,24 +73,17 @@ export default function NovaDespesaPage() {
         setDate(ocr.date);
         filled.push("data");
       }
-      if (ocr.merchant && !region.trim()) {
-        setRegion(ocr.merchant);
-        filled.push("estabelecimento");
-      }
-      if (ocr.category) {
-        setCategory(ocr.category);
-        filled.push("categoria");
-      }
+      // Categoria e região: só preenchimento manual (OCR não altera)
       setOcrFilled(filled);
       if (ocr.provider === "google-vision") {
         setOcrProgress("Lido com Google Vision");
       } else {
-        setOcrProgress("Lido offline (Tesseract) — ative a cobrança Google p/ melhor qualidade");
+        setOcrProgress("Lido offline (Tesseract)");
       }
 
       if (filled.length === 0) {
         setError(
-          "Não consegui ler valor/número automaticamente. Ajuste a foto (boa luz, nota reta) ou preencha manualmente.",
+          "Não consegui ler valor, NF ou data. Ajuste a foto (boa luz, nota reta) ou preencha manualmente.",
         );
       }
     } catch (err) {
@@ -116,6 +109,16 @@ export default function NovaDespesaPage() {
     );
     if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
       setError("Informe um valor válido.");
+      setBusy(false);
+      return;
+    }
+    if (!category) {
+      setError("Selecione a categoria.");
+      setBusy(false);
+      return;
+    }
+    if (!region.trim()) {
+      setError("Informe a região / cliente.");
       setBusy(false);
       return;
     }
@@ -173,9 +176,8 @@ export default function NovaDespesaPage() {
       <div>
         <h1 className="text-3xl text-[var(--ink)]">Nova despesa</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Fotografe a nota: o sistema lê <strong>valor</strong>,{" "}
-          <strong>número</strong> e <strong>data</strong> automaticamente. Você
-          só confere e salva.
+          OCR preenche só <strong>valor</strong>, <strong>número da NF</strong>{" "}
+          e <strong>data</strong>. Categoria e região você informa.
         </p>
       </div>
 
@@ -250,7 +252,7 @@ export default function NovaDespesaPage() {
         </div>
 
         <div>
-          <p className="label mb-2">2. Confira os dados lidos</p>
+          <p className="label mb-2">2. Confira o que o OCR leu</p>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Valor (R$)</label>
@@ -272,10 +274,7 @@ export default function NovaDespesaPage() {
               />
             </div>
           </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
+          <div className="mt-3">
             <label className="label">Data</label>
             <input
               className={`field ${ocrFilled.includes("data") ? "ring-2 ring-[var(--accent)]" : ""}`}
@@ -285,30 +284,44 @@ export default function NovaDespesaPage() {
               required
             />
           </div>
-          <div>
-            <label className="label">Categoria</label>
-            <select
-              className="field"
-              value={category}
-              onChange={(e) => setCategory(e.target.value as ExpenseCategory)}
-            >
-              {(Object.keys(CATEGORY_LABELS) as ExpenseCategory[]).map((c) => (
-                <option key={c} value={c}>
-                  {CATEGORY_LABELS[c]}
-                </option>
-              ))}
-            </select>
-          </div>
         </div>
 
         <div>
-          <label className="label">Região / cliente</label>
-          <input
-            className="field"
-            value={region}
-            onChange={(e) => setRegion(e.target.value)}
-            placeholder="Ex: Região Sul — Cliente X"
-          />
+          <p className="label mb-2">3. Você preenche</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Categoria</label>
+              <select
+                className="field"
+                value={category}
+                onChange={(e) =>
+                  setCategory(e.target.value as ExpenseCategory | "")
+                }
+                required
+              >
+                <option value="" disabled>
+                  Selecione…
+                </option>
+                {(Object.keys(CATEGORY_LABELS) as ExpenseCategory[]).map(
+                  (c) => (
+                    <option key={c} value={c}>
+                      {CATEGORY_LABELS[c]}
+                    </option>
+                  ),
+                )}
+              </select>
+            </div>
+            <div>
+              <label className="label">Região / cliente</label>
+              <input
+                className="field"
+                value={region}
+                onChange={(e) => setRegion(e.target.value)}
+                placeholder="Ex: Região Sul — Cliente X"
+                required
+              />
+            </div>
+          </div>
         </div>
 
         <div>
@@ -340,7 +353,7 @@ export default function NovaDespesaPage() {
           disabled={busy || ocrBusy || !preview}
           type="submit"
         >
-          {busy ? "Salvando…" : "3. Salvar despesa"}
+          {busy ? "Salvando…" : "4. Salvar despesa"}
         </button>
       </form>
     </div>

@@ -1,11 +1,8 @@
-import type { ExpenseCategory } from "./types";
 import {
   normalizeOcrText,
   parseBrazilianAmount,
   parseExpenseDate,
   parseInvoiceNumber,
-  parseMerchantName,
-  suggestCategory,
   type OcrExpenseResult,
 } from "./ocr-parsers";
 
@@ -145,8 +142,6 @@ function parseFromText(text: string) {
     invoiceNumber:
       parseInvoiceNumber(normalized) ?? parseInvoiceNumber(text),
     date: parseExpenseDate(normalized) ?? parseExpenseDate(text),
-    merchant: parseMerchantName(normalized) ?? parseMerchantName(text),
-    category: suggestCategory(normalized) ?? suggestCategory(text),
   };
 }
 
@@ -188,8 +183,8 @@ async function extractWithGoogleVision(
       amount: data.amount ?? null,
       invoiceNumber: data.invoiceNumber ?? null,
       date: data.date ?? null,
-      merchant: data.merchant ?? null,
-      category: data.category ?? null,
+      merchant: null,
+      category: null,
       rawText: data.rawText || "",
       confidence: data.confidence ?? 0.85,
       provider: "google-vision",
@@ -241,8 +236,7 @@ async function extractWithTesseract(
       const fieldScore =
         Number(parsed.amount != null) * 3 +
         Number(Boolean(parsed.invoiceNumber)) * 2 +
-        Number(Boolean(parsed.date)) * 2 +
-        Number(Boolean(parsed.merchant));
+        Number(Boolean(parsed.date)) * 2;
       passes.push({
         ...parsed,
         confidence: (result.data.confidence || 0) / 100,
@@ -268,11 +262,6 @@ async function extractWithTesseract(
     best.invoiceNumber ??
     voteValue(passes.map((p) => p.invoiceNumber as string | null));
   const date = best.date ?? voteValue(passes.map((p) => p.date));
-  const merchant =
-    best.merchant ?? voteValue(passes.map((p) => p.merchant));
-  const category =
-    best.category ??
-    voteValue(passes.map((p) => p.category as ExpenseCategory | null));
 
   const filled =
     Number(amount != null) +
@@ -283,8 +272,8 @@ async function extractWithTesseract(
     amount,
     invoiceNumber,
     date,
-    merchant,
-    category,
+    merchant: null,
+    category: null,
     rawText: best.raw,
     confidence: Math.min(1, best.confidence + filled * 0.05),
     provider: "tesseract",

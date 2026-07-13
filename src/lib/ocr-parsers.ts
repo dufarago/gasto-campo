@@ -310,8 +310,7 @@ export function parseExpenseFields(text: string): OcrExpenseResult {
   const invoiceNumber =
     parseInvoiceNumber(normalized) ?? parseInvoiceNumber(text);
   const date = parseExpenseDate(normalized) ?? parseExpenseDate(text);
-  const merchant = parseMerchantName(normalized) ?? parseMerchantName(text);
-  const category = suggestCategory(normalized) ?? suggestCategory(text);
+  // Categoria e região/estabelecimento: preenchimento manual (não OCR)
   const filled =
     Number(amount != null) +
     Number(Boolean(invoiceNumber)) +
@@ -321,8 +320,8 @@ export function parseExpenseFields(text: string): OcrExpenseResult {
     amount,
     invoiceNumber,
     date,
-    merchant,
-    category,
+    merchant: null,
+    category: null,
     rawText: normalized || text,
     confidence: Math.min(0.95, 0.55 + filled * 0.12),
   };
