@@ -28,7 +28,9 @@ export default function HistoricoPage() {
             .
           </p>
         </div>
-        {(user?.role === "tecnico" || user?.role === "executivo") && (
+        {(user?.role === "tecnico" ||
+          user?.role === "executivo" ||
+          user?.role === "gestor") && (
           <Link href="/nova" className="btn-primary shrink-0">
             Nova despesa
           </Link>
