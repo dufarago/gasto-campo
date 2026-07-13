@@ -150,7 +150,11 @@ export default function NovaDespesaPage() {
     }
   }
 
-  if (user?.role !== "tecnico" && user?.role !== "executivo") {
+  if (
+    user?.role !== "tecnico" &&
+    user?.role !== "executivo" &&
+    user?.role !== "gestor"
+  ) {
     return (
       <div className="card p-6">
         Seu perfil não cadastra despesas de campo. Use o dashboard ou o

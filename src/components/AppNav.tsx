@@ -8,7 +8,7 @@ import { ROLE_LABELS } from "@/lib/types";
 
 const links = [
   { href: "/historico", label: "Histórico", roles: ["tecnico", "executivo", "gestor", "financeiro"] },
-  { href: "/nova", label: "Nova", roles: ["tecnico", "executivo"] },
+  { href: "/nova", label: "Nova", roles: ["tecnico", "executivo", "gestor"] },
   { href: "/dashboard", label: "Dashboard", roles: ["gestor", "financeiro"] },
   { href: "/financeiro", label: "Financeiro", roles: ["financeiro", "gestor"] },
 ] as const;
