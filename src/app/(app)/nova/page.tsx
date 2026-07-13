@@ -55,7 +55,7 @@ export default function NovaDespesaPage() {
       setImageFile(compressed);
       setPreview(dataUrl);
 
-      setOcrProgress("Lendo a nota em várias passagens…");
+      setOcrProgress("Lendo com Google Vision…");
       const ocr = await extractExpenseFromImage(compressed);
       setOcrRaw(ocr.rawText);
       setOcrConfidence(ocr.confidence);
@@ -82,6 +82,10 @@ export default function NovaDespesaPage() {
         filled.push("categoria");
       }
       setOcrFilled(filled);
+
+      if (filled.length > 0 && ocr.provider) {
+        setOcrProgress("");
+      }
 
       if (filled.length === 0) {
         setError(
