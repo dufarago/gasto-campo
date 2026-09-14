@@ -301,6 +301,8 @@ export type OcrExpenseResult = OcrResult & {
   merchant: string | null;
   category: ExpenseCategory | null;
   provider?: "google-vision" | "tesseract";
+  /** Aviso quando Vision falhou e caiu no Tesseract */
+  warning?: string | null;
 };
 
 export function parseExpenseFields(text: string): OcrExpenseResult {

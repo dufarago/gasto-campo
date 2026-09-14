@@ -74,3 +74,10 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   gestor: "Gestor",
   financeiro: "Financeiro",
 };
+
+/** Papéis permitidos no cadastro público (beta). */
+export const SIGNUP_ROLES: UserRole[] = ["tecnico", "executivo"];
+
+export function clampSignupRole(role: UserRole): "tecnico" | "executivo" {
+  return role === "executivo" ? "executivo" : "tecnico";
+}

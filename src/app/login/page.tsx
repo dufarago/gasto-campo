@@ -4,7 +4,11 @@ import Image from "next/image";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { ROLE_LABELS, type UserRole } from "@/lib/types";
+import {
+  ROLE_LABELS,
+  SIGNUP_ROLES,
+  type UserRole,
+} from "@/lib/types";
 
 export default function LoginPage() {
   const { user, loading, login, registerLocal, usingSupabase, demoUsers } =
@@ -16,7 +20,13 @@ export default function LoginPage() {
   const [role, setRole] = useState<UserRole>("tecnico");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!loading && user) router.replace("/");
@@ -26,13 +36,30 @@ export default function LoginPage() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const err =
-      mode === "login"
-        ? await login(email, password)
-        : await registerLocal({ name, email, password, role });
+    setInfo(null);
+
+    if (mode === "login") {
+      const err = await login(email, password);
+      setBusy(false);
+      if (err) {
+        setError(err);
+        return;
+      }
+      router.replace("/");
+      return;
+    }
+
+    const result = await registerLocal({ name, email, password, role });
     setBusy(false);
-    if (err) {
-      setError(err);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    if (result.needsEmailConfirm) {
+      setInfo(
+        "Conta criada. Confirme o e-mail (se exigido) e depois entre com Entrar.",
+      );
+      setMode("login");
       return;
     }
     router.replace("/");
@@ -114,12 +141,15 @@ export default function LoginPage() {
                 value={role}
                 onChange={(e) => setRole(e.target.value as UserRole)}
               >
-                {(Object.keys(ROLE_LABELS) as UserRole[]).map((r) => (
+                {SIGNUP_ROLES.map((r) => (
                   <option key={r} value={r}>
                     {ROLE_LABELS[r]}
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Gestor e Financeiro são promovidos pelo administrador.
+              </p>
             </div>
           </>
         )}
@@ -142,6 +172,7 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
+            minLength={6}
           />
         </div>
 
@@ -150,21 +181,28 @@ export default function LoginPage() {
             {error}
           </p>
         )}
+        {info && (
+          <p className="rounded-lg bg-[var(--accent-soft)] px-3 py-2 text-sm text-[var(--accent)]">
+            {info}
+          </p>
+        )}
 
         <button className="btn-primary w-full" disabled={busy} type="submit">
           {busy ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar e entrar"}
         </button>
 
-        <p className="text-xs text-[var(--muted)]">
-          {usingSupabase
-            ? "Conectado ao Supabase."
-            : "Modo local (demo). Configure NEXT_PUBLIC_SUPABASE_URL para produção."}
+        <p className="text-xs text-[var(--muted)]" suppressHydrationWarning>
+          {!mounted
+            ? "\u00a0"
+            : usingSupabase
+              ? "Beta conectado ao Supabase."
+              : "Modo local (dev). Configure Supabase para o beta — ver docs/BETA_SETUP.md."}
         </p>
       </form>
 
-      {!usingSupabase && (
+      {mounted && !usingSupabase && (
         <div className="card p-4 text-sm">
-          <p className="mb-2 font-medium">Contas demo (senha: demo123)</p>
+          <p className="mb-2 font-medium">Contas demo (somente desenvolvimento)</p>
           <ul className="space-y-1 text-[var(--muted)]">
             {demoUsers.map((u) => (
               <li key={u.email}>

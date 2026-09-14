@@ -178,6 +178,31 @@ function mapRemoteExpense(row: RemoteExpenseRow): Expense {
   };
 }
 
+/** URL assinada da foto no Storage (válida ~1h). */
+export async function getReceiptSignedUrl(
+  imagePath: string | null | undefined,
+): Promise<string | null> {
+  if (!imagePath || !isSupabaseConfigured()) return null;
+  const supabase = createBrowserSupabase();
+  if (!supabase) return null;
+  const { data, error } = await supabase.storage
+    .from("receipts")
+    .createSignedUrl(imagePath, 60 * 60);
+  if (error || !data?.signedUrl) return null;
+  return data.signedUrl;
+}
+
+async function attachReceiptPreviews(expenses: Expense[]): Promise<Expense[]> {
+  return Promise.all(
+    expenses.map(async (item) => {
+      if (item.imageDataUrl || item.imageBlob || !item.imagePath) return item;
+      const url = await getReceiptSignedUrl(item.imagePath);
+      if (!url) return item;
+      return { ...item, imageDataUrl: url };
+    }),
+  );
+}
+
 /** Busca despesas no Supabase e mescla com o IndexedDB local. */
 export async function loadExpenses(options?: {
   userId?: string;
@@ -219,13 +244,13 @@ export async function loadExpenses(options?: {
       byLocalId.set(item.localId, item);
       continue;
     }
-    // Prefere a versão mais recente; mantém imagem local se existir
     const localNewer =
       new Date(item.updatedAt).getTime() > new Date(existing.updatedAt).getTime();
     byLocalId.set(item.localId, {
       ...(localNewer ? item : existing),
       imageDataUrl: item.imageDataUrl ?? existing.imageDataUrl,
       imageBlob: item.imageBlob ?? existing.imageBlob,
+      imagePath: item.imagePath ?? existing.imagePath,
       status:
         item.status === "pendente_sync" || item.status === "rascunho"
           ? item.status
@@ -235,9 +260,11 @@ export async function loadExpenses(options?: {
     });
   }
 
-  return [...byLocalId.values()].sort(
+  const merged = [...byLocalId.values()].sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
   );
+
+  return attachReceiptPreviews(merged);
 }
 
 export async function updateExpenseStatus(

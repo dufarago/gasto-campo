@@ -32,6 +32,7 @@ export default function NovaDespesaPage() {
   const [ocrRaw, setOcrRaw] = useState("");
   const [ocrFilled, setOcrFilled] = useState<string[]>([]);
   const [ocrProgress, setOcrProgress] = useState("");
+  const [ocrStatus, setOcrStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +47,7 @@ export default function NovaDespesaPage() {
     setOcrBusy(true);
     setOcrProgress("Preparando imagem…");
     setOcrFilled([]);
+    setOcrStatus(null);
     setAmount("");
     setInvoiceNumber("");
 
@@ -55,7 +57,11 @@ export default function NovaDespesaPage() {
       setImageFile(compressed);
       setPreview(dataUrl);
 
-      setOcrProgress("Lendo com Google Vision…");
+      setOcrProgress(
+        navigator.onLine
+          ? "Lendo com Google Vision…"
+          : "Sem rede — lendo offline…",
+      );
       const ocr = await extractExpenseFromImage(compressed);
       setOcrRaw(ocr.rawText);
       setOcrConfidence(ocr.confidence);
@@ -73,15 +79,21 @@ export default function NovaDespesaPage() {
         setDate(ocr.date);
         filled.push("data");
       }
-      // Categoria e região: só preenchimento manual (OCR não altera)
       setOcrFilled(filled);
+
       if (ocr.provider === "google-vision") {
-        setOcrProgress("Lido com Google Vision");
+        setOcrStatus("Lido com Google Vision");
       } else {
-        setOcrProgress("Lido offline (Tesseract)");
+        setOcrStatus(
+          ocr.warning
+            ? `Lido com Tesseract (fallback). ${ocr.warning}`
+            : "Lido com Tesseract (offline)",
+        );
       }
 
-      if (filled.length === 0) {
+      if (ocr.warning && ocr.provider !== "google-vision") {
+        setError(ocr.warning);
+      } else if (filled.length === 0) {
         setError(
           "Não consegui ler valor, NF ou data. Ajuste a foto (boa luz, nota reta) ou preencha manualmente.",
         );
@@ -242,12 +254,16 @@ export default function NovaDespesaPage() {
 
           {!ocrBusy && ocrFilled.length > 0 && (
             <p className="mt-2 rounded-lg bg-[var(--accent-soft)] px-3 py-2 text-sm text-[var(--accent)]">
+              {ocrStatus ? `${ocrStatus}. ` : ""}
               Li automaticamente: {ocrFilled.join(", ")}.
               {ocrConfidence != null
                 ? ` Confiança ~${(ocrConfidence * 100).toFixed(0)}%.`
                 : ""}{" "}
               Confira os campos abaixo.
             </p>
+          )}
+          {!ocrBusy && ocrStatus && ocrFilled.length === 0 && (
+            <p className="mt-2 text-sm text-[var(--muted)]">{ocrStatus}</p>
           )}
         </div>
 

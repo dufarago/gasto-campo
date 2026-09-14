@@ -60,11 +60,15 @@ export async function POST(request: Request) {
     const visionJson = (await visionRes.json()) as VisionResponse;
 
     if (!visionRes.ok || visionJson.error) {
+      const message =
+        visionJson.error?.message || "Falha na API do Google Vision";
+      const billing =
+        /billing|BILLING_DISABLED/i.test(message) ||
+        /billing/i.test(JSON.stringify(visionJson));
       return NextResponse.json(
         {
-          error:
-            visionJson.error?.message ||
-            "Falha na API do Google Vision",
+          error: message,
+          code: billing ? "BILLING_DISABLED" : "VISION_ERROR",
         },
         { status: 502 },
       );
@@ -72,8 +76,13 @@ export async function POST(request: Request) {
 
     const first = visionJson.responses?.[0];
     if (first?.error?.message) {
+      const message = first.error.message;
+      const billing = /billing|BILLING_DISABLED/i.test(message);
       return NextResponse.json(
-        { error: first.error.message },
+        {
+          error: message,
+          code: billing ? "BILLING_DISABLED" : "VISION_ERROR",
+        },
         { status: 502 },
       );
     }

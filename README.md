@@ -1,50 +1,38 @@
-# Gasto Campo
+# Gasto Campo — Grupo Daan
 
-PWA para controle de despesas de viagem: captura de notas, OCR (valor e número), modo offline e dashboard para gestão/financeiro.
+PWA de despesas de campo: foto da nota, OCR (Google Vision), offline e sync com Supabase.
 
-## Como rodar
+## Beta (produção)
+
+Siga o guia completo: **[docs/BETA_SETUP.md](docs/BETA_SETUP.md)**
+
+Resumo:
+
+1. Projeto Firebase/GCP com **Cloud Vision** + billing + `GOOGLE_VISION_API_KEY`
+2. Projeto **Supabase** novo + SQL em `supabase/schema.sql`
+3. `.env.local` e variáveis na **Vercel** + Redeploy
+4. Promover o 1º gestor com `supabase/promote_gestor.sql`
+
+App: https://gasto-campo.vercel.app
+
+## Desenvolvimento local
 
 ```bash
 npm install
+cp .env.example .env.local   # preencha as chaves
 npm run dev
 ```
 
-Abra [http://localhost:3000](http://localhost:3000).
+Sem `.env.local`, o app sobe em **modo demo** (só no aparelho; senha `demo123`). Isso **não** é o beta.
 
-### Contas demo (modo local)
+### Papéis no beta
 
-Sem Supabase configurado, use senha `demo123`:
+| Papel | Como obtém |
+|--------|------------|
+| Técnico / Executivo | Cadastro no app |
+| Gestor / Financeiro | Promoção via SQL (`promote_gestor.sql`) |
 
-| E-mail | Perfil |
-|--------|--------|
-| tecnico@demo.com | Técnico |
-| executivo@demo.com | Executivo |
-| gestor@demo.com | Gestor |
-| financeiro@demo.com | Financeiro |
-
-No mesmo navegador, as despesas ficam no IndexedDB e o gestor/financeiro vê o consolidado local. Em produção, use Supabase para sincronizar entre aparelhos.
-
-## Supabase (produção)
-
-1. Crie um projeto no [Supabase](https://supabase.com).
-2. Rode o SQL em [`supabase/schema.sql`](supabase/schema.sql).
-3. Copie `.env.example` para `.env.local` e preencha:
-
-```
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-```
-
-4. Reinicie `npm run dev`.
-
-## Recursos da v1
-
-- Login por perfil (técnico, executivo, gestor, financeiro)
-- Foto da nota + compressão
-- OCR (Tesseract) sugerindo valor e número da NF, com revisão manual
-- Salvamento offline (IndexedDB) + fila de sync automática ao voltar online
-- Histórico, dashboard por pessoa e fila financeira com aprovação/CSV
-- Manifest PWA + service worker
+OCR preenche **valor**, **NF** e **data**. Categoria e região são manuais.
 
 ## Scripts
 

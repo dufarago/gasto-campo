@@ -158,8 +158,17 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 async function extractWithGoogleVision(
   imageSource: File | Blob | string,
-): Promise<OcrExpenseResult | null> {
-  if (typeof window === "undefined" || !navigator.onLine) return null;
+): Promise<
+  | { ok: true; result: OcrExpenseResult }
+  | { ok: false; warning: string; code?: string }
+> {
+  if (typeof window === "undefined" || !navigator.onLine) {
+    return {
+      ok: false,
+      warning: "Sem internet — OCR offline (Tesseract).",
+      code: "OFFLINE",
+    };
+  }
 
   try {
     const blob =
@@ -174,23 +183,51 @@ async function extractWithGoogleVision(
       body: JSON.stringify({ imageBase64 }),
     });
 
-    if (res.status === 503) return null;
-    if (!res.ok) return null;
+    const data = (await res.json()) as OcrExpenseResult & {
+      error?: string;
+      code?: string;
+    };
 
-    const data = (await res.json()) as OcrExpenseResult;
+    if (res.status === 503) {
+      return {
+        ok: false,
+        warning:
+          "Google Vision não configurado no servidor. Defina GOOGLE_VISION_API_KEY.",
+        code: "NOT_CONFIGURED",
+      };
+    }
+
+    if (!res.ok) {
+      const billing = data.code === "BILLING_DISABLED";
+      return {
+        ok: false,
+        warning: billing
+          ? "Google Vision: ative o faturamento no projeto GCP (billing)."
+          : data.error || "Falha no Google Vision.",
+        code: data.code,
+      };
+    }
 
     return {
-      amount: data.amount ?? null,
-      invoiceNumber: data.invoiceNumber ?? null,
-      date: data.date ?? null,
-      merchant: null,
-      category: null,
-      rawText: data.rawText || "",
-      confidence: data.confidence ?? 0.85,
-      provider: "google-vision",
+      ok: true,
+      result: {
+        amount: data.amount ?? null,
+        invoiceNumber: data.invoiceNumber ?? null,
+        date: data.date ?? null,
+        merchant: null,
+        category: null,
+        rawText: data.rawText || "",
+        confidence: data.confidence ?? 0.85,
+        provider: "google-vision",
+        warning: null,
+      },
     };
   } catch {
-    return null;
+    return {
+      ok: false,
+      warning: "Não foi possível chamar o Google Vision.",
+      code: "NETWORK",
+    };
   }
 }
 
@@ -211,7 +248,6 @@ async function extractWithTesseract(
       ? imageSource
       : URL.createObjectURL(imageSource);
 
-  // Menos passagens, e escolhemos a MELHOR (não concatena tudo)
   const jobs: Array<{ img: Blob | string; psm: unknown }> = [
     { img: variants[1], psm: PSM.AUTO },
     { img: variants[0], psm: PSM.SINGLE_BLOCK },
@@ -255,9 +291,7 @@ async function extractWithTesseract(
   );
   const best = passes[0];
 
-  // Complementa campos faltantes com votação das outras passagens
-  const amount =
-    best.amount ?? voteValue(passes.map((p) => p.amount));
+  const amount = best.amount ?? voteValue(passes.map((p) => p.amount));
   const invoiceNumber =
     best.invoiceNumber ??
     voteValue(passes.map((p) => p.invoiceNumber as string | null));
@@ -283,12 +317,13 @@ async function extractWithTesseract(
 export async function extractExpenseFromImage(
   imageSource: File | Blob | string,
 ): Promise<OcrExpenseResult> {
+  // Online: tenta Vision primeiro (qualidade do beta)
   const google = await extractWithGoogleVision(imageSource);
-  if (
-    google &&
-    (google.amount != null || google.invoiceNumber || google.rawText)
-  ) {
-    return google;
-  }
-  return extractWithTesseract(imageSource);
+  if (google.ok) return google.result;
+
+  const tess = await extractWithTesseract(imageSource);
+  return {
+    ...tess,
+    warning: google.warning,
+  };
 }

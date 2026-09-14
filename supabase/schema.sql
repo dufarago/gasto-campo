@@ -115,18 +115,37 @@ create policy "receipts_read_own_or_manager"
     )
   );
 
+create policy "receipts_update_own"
+  on storage.objects for update
+  using (
+    bucket_id = 'receipts'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  )
+  with check (
+    bucket_id = 'receipts'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer
 as $$
+declare
+  requested text := coalesce(new.raw_user_meta_data->>'role', 'tecnico');
+  safe_role public.user_role := 'tecnico';
 begin
+  -- Cadastro público só pode nascer como tecnico ou executivo
+  if requested = 'executivo' then
+    safe_role := 'executivo';
+  end if;
+
   insert into public.profiles (id, email, name, role)
   values (
     new.id,
     new.email,
     coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
-    coalesce((new.raw_user_meta_data->>'role')::public.user_role, 'tecnico')
+    safe_role
   );
   return new;
 end;

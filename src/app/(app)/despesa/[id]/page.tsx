@@ -4,20 +4,50 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getExpense } from "@/lib/db";
-import { formatCurrency } from "@/lib/sync";
+import { formatCurrency, getReceiptSignedUrl, loadExpenses } from "@/lib/sync";
 import {
   CATEGORY_LABELS,
   STATUS_LABELS,
   type Expense,
 } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
 
 export default function DespesaDetailPage() {
   const params = useParams<{ id: string }>();
+  const { user } = useAuth();
   const [expense, setExpense] = useState<Expense | null>(null);
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    void getExpense(params.id).then((e) => setExpense(e ?? null));
-  }, [params.id]);
+    let cancelled = false;
+
+    async function load() {
+      let found = (await getExpense(params.id)) ?? null;
+
+      if (!found && user) {
+        const scope =
+          user.role === "gestor" || user.role === "financeiro" ? "all" : "mine";
+        const list = await loadExpenses({ userId: user.id, scope });
+        found = list.find((e) => e.localId === params.id) ?? null;
+      }
+
+      if (cancelled) return;
+      setExpense(found);
+
+      if (!found) return;
+      if (found.imageDataUrl) {
+        setImageSrc(found.imageDataUrl);
+        return;
+      }
+      const signed = await getReceiptSignedUrl(found.imagePath);
+      if (!cancelled) setImageSrc(signed);
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [params.id, user]);
 
   if (!expense) {
     return (
@@ -39,10 +69,10 @@ export default function DespesaDetailPage() {
         {formatCurrency(expense.amount)}
       </h1>
       <div className="card space-y-3 p-5 text-sm">
-        {expense.imageDataUrl && (
+        {imageSrc && (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={expense.imageDataUrl}
+            src={imageSrc}
             alt="Nota"
             className="max-h-80 w-full rounded-xl object-contain bg-[var(--sand)]"
           />
